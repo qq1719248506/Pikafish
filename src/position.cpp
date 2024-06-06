@@ -142,6 +142,8 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
         else if ((idx = PieceToChar.find(token)) != string::npos)
         {
             put_piece(Piece(idx), sq);
+            if (type_of(Piece(idx)) == KING)
+                kingSquare[color_of(Piece(idx))] = sq;
             ++sq;
         }
     }
@@ -178,17 +180,27 @@ void Position::set_check_info() const {
     update_blockers<WHITE>();
     update_blockers<BLACK>();
 
-    Square ksq = square<KING>(~sideToMove);
+    Square ksq = king_square(~sideToMove);
 
     // We have to take special cares about the cannon and checks
-    st->needSlowCheck =
-      checkers() || (attacks_bb<ROOK>(square<KING>(sideToMove)) & pieces(~sideToMove, CANNON));
+    st->needSlowCheck = more_than_one(checkers())
+                     || (attacks_bb<ROOK>(king_square(sideToMove)) & pieces(~sideToMove, CANNON));
 
     st->checkSquares[PAWN]   = pawn_attacks_to_bb(sideToMove, ksq);
     st->checkSquares[KNIGHT] = attacks_bb<KNIGHT_TO>(ksq, pieces());
     st->checkSquares[CANNON] = attacks_bb<CANNON>(ksq, pieces());
     st->checkSquares[ROOK]   = attacks_bb<ROOK>(ksq, pieces());
     st->checkSquares[KING] = st->checkSquares[ADVISOR] = st->checkSquares[BISHOP] = 0;
+
+    Bitboard hollowCannons = st->checkSquares[ROOK] & pieces(sideToMove, CANNON);
+    if (hollowCannons)
+    {
+        Bitboard hollowCannonDiscover = Bitboard(0);
+        while (hollowCannons)
+            hollowCannonDiscover |= between_bb(ksq, pop_lsb(hollowCannons));
+        for (PieceType pt = ROOK; pt < KING; ++pt)
+            st->checkSquares[pt] |= hollowCannonDiscover;
+    }
 }
 
 
@@ -200,7 +212,7 @@ void Position::set_state() const {
     st->key                  = 0;
     st->pawnKey              = Zobrist::noPawns;
     st->majorMaterial[WHITE] = st->majorMaterial[BLACK] = VALUE_ZERO;
-    st->checkersBB = checkers_to(~sideToMove, square<KING>(sideToMove));
+    st->checkersBB = checkers_to(~sideToMove, king_square(sideToMove));
     st->move       = Move::none();
 
     set_check_info();
@@ -264,7 +276,7 @@ string Position::fen() const {
 template<Color c>
 void Position::update_blockers() const {
 
-    Square ksq             = square<KING>(c);
+    Square ksq             = king_square(c);
     st->blockersForKing[c] = 0;
     st->pinners[~c]        = 0;
 
@@ -326,22 +338,27 @@ bool Position::legal(Move m) const {
     Square   from     = m.from_sq();
     Square   to       = m.to_sq();
     Bitboard occupied = (pieces() ^ from) | to;
-    Square   ksq      = type_of(moved_piece(m)) == KING ? to : square<KING>(us);
 
     assert(color_of(moved_piece(m)) == us);
-    assert(piece_on(square<KING>(us)) == make_piece(us, KING));
-
-    // A non-king move is always legal when not moving the king or a pinned piece if we don't need slow check
-    if (!st->needSlowCheck && ksq != to && !(blockers_for_king(us) & from))
-        return true;
+    assert(piece_on(king_square(us)) == make_piece(us, KING));
 
     // If the moving piece is a king, check whether the destination square is
     // attacked by the opponent.
     if (type_of(piece_on(from)) == KING)
         return !(checkers_to(~us, to, occupied));
 
+    // If we don't need slow check. A non-king move is always legal when either:
+    // 1. Not moving a pinned piece.
+    // 2. Moving a pinned non-cannon piece and aligned with king.
+    // 3. Moving a pinned cannon and aligned with king but it's not a capture move.
+    if (!st->needSlowCheck
+        && (!(blockers_for_king(us) & from)
+            || (((type_of(piece_on(from)) != CANNON) || !capture(m))
+                && aligned(from, to, king_square(us)))))
+        return true;
+
     // A non-king move is legal if the king is not under attack after the move.
-    return !(checkers_to(~us, ksq, occupied) & ~square_bb(to));
+    return !(checkers_to(~us, king_square(us), occupied) & ~square_bb(to));
 }
 
 
@@ -382,12 +399,12 @@ bool Position::gives_check(Move m) const {
 
     Square from = m.from_sq();
     Square to   = m.to_sq();
-    Square ksq  = square<KING>(~sideToMove);
+    Square ksq  = king_square(~sideToMove);
 
     PieceType pt = type_of(moved_piece(m));
 
     // Is there a direct check?
-    if (pt == CANNON)
+    if (pt == CANNON && aligned(from, to, ksq))
     {
         if (attacks_bb<CANNON>(to, (pieces() ^ from) | to) & ksq)
             return true;
@@ -506,7 +523,7 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
     st->key = k;
 
     // Calculate checkers bitboard (if move gives check)
-    st->checkersBB = givesCheck ? checkers_to(us, square<KING>(them)) : Bitboard(0);
+    st->checkersBB = givesCheck ? checkers_to(us, king_square(them)) : Bitboard(0);
     assert(givesCheck == bool(st->checkersBB));
 
     sideToMove = ~sideToMove;
@@ -799,7 +816,7 @@ bool Position::chase_legal(Move m) const {
     Bitboard occupied = (pieces() ^ from) | to;
 
     assert(color_of(moved_piece(m)) == us);
-    assert(piece_on(square<KING>(us)) == make_piece(us, KING));
+    assert(piece_on(king_square(us)) == make_piece(us, KING));
 
     // If the moving piece is a king, check whether the destination
     // square is not under new attack after the move.
@@ -807,7 +824,7 @@ bool Position::chase_legal(Move m) const {
         return !(checkers_to(~us, to, occupied));
 
     // A non-king move is chase legal if the king is not under new attack after the move.
-    return !(checkers_to(~us, square<KING>(us), occupied) & ~square_bb(to));
+    return !(checkers_to(~us, king_square(us), occupied) & ~square_bb(to));
 }
 
 
@@ -1115,15 +1132,15 @@ bool Position::pos_is_ok() const {
 
     constexpr bool Fast = true;  // Quick (default) or full check?
 
-    if ((sideToMove != WHITE && sideToMove != BLACK) || piece_on(square<KING>(WHITE)) != W_KING
-        || piece_on(square<KING>(BLACK)) != B_KING)
+    if ((sideToMove != WHITE && sideToMove != BLACK) || piece_on(king_square(WHITE)) != W_KING
+        || piece_on(king_square(BLACK)) != B_KING)
         assert(0 && "pos_is_ok: Default");
 
     if (Fast)
         return true;
 
     if (pieceCount[W_KING] != 1 || pieceCount[B_KING] != 1
-        || checkers_to(sideToMove, square<KING>(~sideToMove)))
+        || checkers_to(sideToMove, king_square(~sideToMove)))
         assert(0 && "pos_is_ok: Kings");
 
     if ((pieces(WHITE, PAWN) & ~PawnBB[WHITE]) || (pieces(BLACK, PAWN) & ~PawnBB[BLACK])

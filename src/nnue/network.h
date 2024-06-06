@@ -20,13 +20,15 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <tuple>
 
-#include "../misc.h"
+#include "../memory.h"
+#include "../position.h"
 #include "../types.h"
+#include "nnue_accumulator.h"
 #include "nnue_architecture.h"
 #include "nnue_feature_transformer.h"
 #include "nnue_misc.h"
-#include "nnue_accumulator.h"
 
 namespace Stockfish {
 
@@ -34,20 +36,23 @@ class Position;
 
 namespace Eval::NNUE {
 
+using NetworkOutput = std::tuple<Value, Value>;
+
 class Network {
    public:
     Network(EvalFile file) :
         evalFile(file) {}
 
+    Network(const Network& other);
+    Network(Network&& other) = default;
+
+    Network& operator=(const Network& other);
+    Network& operator=(Network&& other) = default;
+
     void load(const std::string& rootDirectory, std::string evalfilePath);
     bool save(const std::optional<std::string>& filename) const;
 
-
-    Value evaluate(const Position&           pos,
-                   AccumulatorCaches::Cache* cache,
-                   bool                      adjusted   = false,
-                   int*                      complexity = nullptr) const;
-
+    NetworkOutput evaluate(const Position& pos, AccumulatorCaches::Cache* cache) const;
 
     void hint_common_access(const Position& pos, AccumulatorCaches::Cache* cache) const;
 
@@ -72,7 +77,7 @@ class Network {
     LargePagePtr<FeatureTransformer> featureTransformer;
 
     // Evaluation function
-    AlignedPtr<NetworkArchitecture> network[LayerStacks];
+    AlignedPtr<NetworkArchitecture[]> network;
 
     EvalFile evalFile;
 

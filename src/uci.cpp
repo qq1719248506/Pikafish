@@ -57,7 +57,16 @@ UCIEngine::UCIEngine(int argc, char** argv) :
 
     options["Debug Log File"] << Option("", [](const Option& o) { start_logger(o); });
 
-    options["Threads"] << Option(1, 1, 1024, [this](const Option&) { engine.resize_threads(); });
+    options["NumaPolicy"] << Option("auto", [this](const Option& o) {
+        engine.set_numa_config_from_option(o);
+        print_numa_config_information();
+        print_thread_binding_information();
+    });
+
+    options["Threads"] << Option(1, 1, 1024, [this](const Option&) {
+        engine.resize_threads();
+        print_thread_binding_information();
+    });
 
     options["Hash"] << Option(16, 1, MaxHashMB, [this](const Option& o) { engine.set_tt_size(o); });
 
@@ -111,8 +120,15 @@ void UCIEngine::loop() {
             engine.set_ponderhit(false);
 
         else if (token == "uci")
+        {
             sync_cout << "id name " << engine_info(true) << "\n"
-                      << engine.get_options() << "\nuciok" << sync_endl;
+                      << engine.get_options() << sync_endl;
+
+            print_numa_config_information();
+            print_thread_binding_information();
+
+            sync_cout << "uciok" << sync_endl;
+        }
 
         else if (token == "setoption")
             setoption(is);
@@ -161,6 +177,28 @@ void UCIEngine::loop() {
                       << sync_endl;
 
     } while (token != "quit" && cli.argc == 1);  // The command-line arguments are one-shot
+}
+
+void UCIEngine::print_numa_config_information() const {
+    auto cfgStr = engine.get_numa_config_as_string();
+    sync_cout << "info string Available Processors: " << cfgStr << sync_endl;
+}
+
+void UCIEngine::print_thread_binding_information() const {
+    auto boundThreadsByNode = engine.get_bound_thread_count_by_numa_node();
+    if (!boundThreadsByNode.empty())
+    {
+        sync_cout << "info string NUMA Node Thread Binding: ";
+        bool isFirst = true;
+        for (auto&& [current, total] : boundThreadsByNode)
+        {
+            if (!isFirst)
+                std::cout << ":";
+            std::cout << current << "/" << total;
+            isFirst = false;
+        }
+        std::cout << sync_endl;
+    }
 }
 
 Search::LimitsType UCIEngine::parse_limits(std::istream& is) {
@@ -244,7 +282,7 @@ void UCIEngine::bench(std::istream& args) {
                 Search::LimitsType limits = parse_limits(is);
 
                 if (limits.perft)
-                    nodes = perft(limits);
+                    nodesSearched = perft(limits);
                 else
                 {
                     engine.go(limits);
@@ -272,9 +310,9 @@ void UCIEngine::bench(std::istream& args) {
 
     dbg_print();
 
-    std::cerr << "\n===========================" << "\nTotal time (ms) : " << elapsed
-              << "\nNodes searched  : " << nodes << "\nNodes/second    : " << 1000 * nodes / elapsed
-              << std::endl;
+    std::cerr << "\n==========================="
+              << "\nTotal time (ms) : " << elapsed << "\nNodes searched  : " << nodes
+              << "\nNodes/second    : " << 1000 * nodes / elapsed << std::endl;
 
     // reset callback, to not capture a dangling reference to nodesSearched
     engine.set_on_update_full([&](const auto& i) { on_update_full(i, options["UCI_ShowWDL"]); });
@@ -330,12 +368,12 @@ WinRateParams win_rate_params(const Position& pos) {
     int material = 10 * pos.count<ROOK>() + 5 * pos.count<KNIGHT>() + 5 * pos.count<CANNON>()
                  + 3 * pos.count<BISHOP>() + 2 * pos.count<ADVISOR>() + pos.count<PAWN>();
 
-    // The fitted model only uses data for material counts in [10, 110], and is anchored at count 53.
-    double m = std::clamp(material, 10, 110) / 53.0;
+    // The fitted model only uses data for material counts in [17, 110], and is anchored at count 65.
+    double m = std::clamp(material, 17, 110) / 65.0;
 
     // Return a = p_a(material) and b = p_b(material), see github.com/official-stockfish/WDL_model
-    constexpr double as[] = {229.68413041, -836.53336539, 1004.77236193, 18.19226434};
-    constexpr double bs[] = {114.18428891, -392.54680852, 475.32622987, -123.49708474};
+    constexpr double as[] = {220.59891365, -810.35730430, 928.68185198, 79.83955423};
+    constexpr double bs[] = {61.99287416, -233.72674182, 325.85508322, -68.72720854};
 
     double a = (((as[0] * m + as[1]) * m + as[2]) * m) + as[3];
     double b = (((bs[0] * m + bs[1]) * m + bs[2]) * m) + bs[3];
@@ -385,7 +423,7 @@ std::string UCIEngine::wdl(Value v, const Position& pos) {
     int wdl_w = win_rate_model(v, pos);
     int wdl_l = win_rate_model(-v, pos);
     int wdl_d = 1000 - wdl_w - wdl_l;
-    ss << " wdl " << wdl_w << " " << wdl_d << " " << wdl_l;
+    ss << wdl_w << " " << wdl_d << " " << wdl_l;
 
     return ss.str();
 }

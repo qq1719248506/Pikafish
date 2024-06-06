@@ -180,16 +180,20 @@ void MovePicker::score() {
             Square    to   = m.to_sq();
 
             // histories
-            m.value = 2 * (*mainHistory)[pos.side_to_move()][m.from_to()];
+            m.value = (*mainHistory)[pos.side_to_move()][m.from_to()];
             m.value += 2 * (*pawnHistory)[pawn_structure_index(pos)][pc][to];
             m.value += 2 * (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to] / 4;
+            m.value += (*continuationHistory[2])[pc][to] / 3;
             m.value += (*continuationHistory[3])[pc][to];
             m.value += (*continuationHistory[5])[pc][to];
 
             // bonus for checks
-            m.value += bool(pos.check_squares(pt) & to) * 16384;
+            m.value += bool((pt == CANNON ? pos.check_squares(pt)
+                                              & ~line_bb(from, pos.king_square(~pos.side_to_move()))
+                                          : pos.check_squares(pt))
+                            & to)
+                     * 16384;
 
             // bonus for escaping from capture
             m.value += threatenedPieces & from
@@ -200,13 +204,9 @@ void MovePicker::score() {
                        : 0;
 
             // malus for putting piece en prise
-            m.value -= !(threatenedPieces & from)
-                       ? (pt == ROOK ? bool(to & threatenedByMinor) * 50000
-                                         + bool(to & threatenedByDefender) * 10000
-                          : (pt == KNIGHT || pt == CANNON) ? bool(to & threatenedByDefender) * 25000
-                          : pt != PAWN                     ? bool(to & threatenedByPawn) * 15000
-                                                           : 0)
-                       : 0;
+            m.value -= (pt == ROOK                       ? bool(to & threatenedByMinor) * 50000
+                        : (pt == KNIGHT || pt == CANNON) ? bool(to & threatenedByDefender) * 25000
+                                                         : bool(to & threatenedByPawn) * 15000);
         }
 
         else  // Type == EVASIONS
