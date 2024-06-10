@@ -93,6 +93,7 @@ void TranspositionTable::resize(size_t mbSize, ThreadPool& threads) {
 // Initializes the entire transposition table to zero,
 // in a multi-threaded way.
 void TranspositionTable::clear(ThreadPool& threads) {
+    generation8              = 0;
     const size_t threadCount = threads.num_threads();
 
     for (size_t i = 0; i < threadCount; ++i)
@@ -140,7 +141,6 @@ TTEntry* TranspositionTable::probe(const Key key, bool& found) const {
 
 // Returns an approximation of the hashtable
 // occupation during a search. The hash is x permill full, as per UCI protocol.
-
 // Only counts entries which match the current generation.
 int TranspositionTable::hashfull() const {
 
