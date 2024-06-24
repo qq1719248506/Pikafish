@@ -644,8 +644,7 @@ Value Search::Worker::search(
     // Use static evaluation difference to improve quiet move ordering (~9 Elo)
     if (((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck && !priorCapture)
     {
-        int bonus = std::clamp(-12 * int((ss - 1)->staticEval + ss->staticEval), -1003, 1820);
-        bonus     = bonus > 0 ? 2 * bonus : bonus / 2;
+        int bonus = std::clamp(-12 * int((ss - 1)->staticEval + ss->staticEval), -1003, 1820) + 800;
         thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()] << bonus;
         if (type_of(pos.piece_on(prevSq)) != PAWN)
             thisThread->pawnHistory[pawn_structure_index(pos)][pos.piece_on(prevSq)][prevSq]
@@ -724,9 +723,12 @@ Value Search::Worker::search(
     }
 
     // Step 9. Internal iterative reductions (~9 Elo)
-    // For PV nodes without a ttMove, we decrease depth by 3.
+    // For PV nodes without a ttMove, we decrease depth.
+    // Additionally, if the current position is found in the TT
+    // and the stored depth in the TT is greater than or equal to
+    // current search depth, we decrease search depth even further.
     if (PvNode && !ttData.move)
-        depth -= 2;
+        depth -= 2 + (ss->ttHit && ttData.depth >= depth);
 
     if (!PvNode && ss->ttHit && (tte->bound() & BOUND_UPPER) && ttValue > alpha + 5 * depth)
         depth--;
@@ -1179,11 +1181,17 @@ moves_loop:  // When in check, search starts here
                 rm.score = -VALUE_INFINITE;
         }
 
-        if (value > bestValue)
+        // In case we have an alternative move equal in eval to the current bestmove,
+        // promote it to bestmove by pretending it just exceeds alpha (but not beta).
+        int inc = (value == bestValue && (int(nodes) & 15) == 0
+                   && ss->ply + 2 + ss->ply / 32 >= thisThread->rootDepth
+                   && std::abs(value) + 1 < VALUE_MATE_IN_MAX_PLY);
+
+        if (value + inc > bestValue)
         {
             bestValue = value;
 
-            if (value > alpha)
+            if (value + inc > alpha)
             {
                 bestMove = move;
 
@@ -1485,7 +1493,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta,
 
                 // If static exchange evaluation is much worse than what is needed to not
                 // fall below alpha we can prune this move.
-                if (futilityBase > alpha && !pos.see_ge(move, (alpha - futilityBase) * 2 - 31))
+                if (futilityBase > alpha && !pos.see_ge(move, (alpha - futilityBase) * 4))
                 {
                     bestValue = alpha;
                     continue;
