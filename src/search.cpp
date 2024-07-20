@@ -802,7 +802,7 @@ moves_loop:  // When in check, search starts here
     // Step 11. A small Probcut idea (~4 Elo)
     probCutBeta = beta + 425;
     if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 3 && ttData.value >= probCutBeta
-        && std::abs(ttData.value) < VALUE_MATE_IN_MAX_PLY && std::abs(beta) < VALUE_MATE_IN_MAX_PLY)
+        && std::abs(beta) < VALUE_MATE_IN_MAX_PLY && std::abs(probCutBeta) < VALUE_MATE_IN_MAX_PLY)
         return probCutBeta;
 
     const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory,
